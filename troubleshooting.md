@@ -82,3 +82,19 @@ _(01:53:30 EEST = 2026-09-08T22:53:30.416+00:00, the recorded `configuration_loa
 - **Related commit:** `fix(app): remove credentials from configuration_loaded startup log`
 - **Remaining uncertainty:** The credential remains stored in the git-tracked `config/app.env` file and is still copied into the built image via `COPY config/app.env /srv/app.env`. This broader secret-management issue is deferred to the dedicated hardening phase. Earlier diagnostic commands also exposed the credential in terminal output; this will be documented as an investigation disclosure in `security_review.md`.
 
+
+---
+
+## INC-005 — Compose Network Isolation and PostgreSQL Persistence
+
+### Entry / 2026-09-10 — Time: 15:56:24 EEST
+- **Symptom:** The Compose configuration exposed PostgreSQL and Redis host ports, connected NGINX to both frontend and backend networks, and mounted the PostgreSQL named volume at `/var/lib/postgresql/backup` while using `tmpfs` for `/var/lib/postgresql/data`. These settings did not satisfy the required network isolation, host-port, and PostgreSQL persistence requirements.
+- **Hypothesis:** The Compose topology and PostgreSQL storage configuration were responsible for the non-compliant network exposure and lack of persistent PostgreSQL storage.
+- **Command or test:** Inspected `docker-compose.yml`, inspected the existing `barq-assessment_postgres-data` named volume, recreated the stack with the corrected Compose configuration, checked container/network state, created a PostgreSQL record through `/records`, recreated the PostgreSQL container without deleting the named volume, and queried `/records` again.
+- **Actual output:** Before the change, PostgreSQL and Redis had host port mappings and NGINX was attached to both networks. The named PostgreSQL volume existed but contained no files at its mounted `/backup` path, while PostgreSQL data was configured on `tmpfs`. After the change, NGINX was attached only to `barq-assessment_frontend`; PostgreSQL and Redis were attached only to `barq-assessment_backend`; `docker compose ps -a` showed no published host ports for the applications, PostgreSQL, or Redis; and PostgreSQL was healthy.
+- **Failed attempt and what changed your thinking:** No failed attempt was fabricated. The existing configuration and controlled runtime verification were sufficient to identify and prove the configuration issue.
+- **Root cause:** `docker-compose.yml` used an incorrect PostgreSQL storage mount, an ephemeral `tmpfs` data directory, unnecessary PostgreSQL/Redis host-port publications, and attached NGINX to the backend network.
+- **Fix:** Mounted the named `postgres-data` volume at `/var/lib/postgresql/data`, removed the PostgreSQL and Redis host-port mappings, removed the PostgreSQL `tmpfs` data mount, and restricted NGINX to the frontend network.
+- **Retest evidence:** All five services started successfully and remained healthy. `docker inspect nginx` showed only `barq-assessment_frontend`; `docker inspect postgres` and `docker inspect redis` showed only `barq-assessment_backend`. A record titled `Volume persistence verification` was created through `POST /records`, PostgreSQL was recreated with `docker compose -p barq-assessment up -d --force-recreate postgres` without deleting the named volume, and `GET /records` returned the same record with `id: 3` afterward, proving PostgreSQL data survived container recreation.
+- **Related commit:** Pending — this entry documents the changes currently present in the working tree for the infrastructure hardening commit.
+- **Remaining uncertainty:** Redis persistence, restart policies, resource limits, container user privileges, secret management, validation/failure testing, backup/restore, CI, and the remaining documentation requirements still require separate implementation and verification.
