@@ -5,6 +5,7 @@ import re
 import time
 import uuid
 from datetime import datetime, timezone
+from urllib.parse import urlsplit
 import psycopg
 import redis
 from flask import Flask, g, jsonify, request
@@ -138,8 +139,28 @@ def create_app(config=None, dependencies=None):
             return unavailable("redis", exc)
     return app
 
+def _safe_connection_metadata(url):
+    """Return non-secret connection metadata for logging."""
+    if not url:
+        return {}
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        return {}
+
+    metadata = {}
+    if parsed.hostname:
+        metadata["host"] = parsed.hostname
+    if parsed.port:
+        metadata["port"] = parsed.port
+    if parsed.path and parsed.path != "/":
+        metadata["database"] = parsed.path.lstrip("/")
+    return metadata
+
+
 if __name__ == "__main__":
-    log_event("INFO", "configuration_loaded", database_url=os.getenv("DATABASE_URL", ""),
-              redis_url=os.getenv("REDIS_URL", ""))
+    log_event("INFO", "configuration_loaded",
+              database=_safe_connection_metadata(os.getenv("DATABASE_URL", "")),
+              redis=_safe_connection_metadata(os.getenv("REDIS_URL", "")))
     create_app().run(host=os.getenv("APP_HOST", "0.0.0.0"),
                      port=int(os.getenv("APP_PORT", "8080")), threaded=True, debug=False)
