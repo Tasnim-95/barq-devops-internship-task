@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check Python syntax
+        run: |
+          python -m py_compile \
+            app/server.py \
+            validate.py \
+            failure_test.py \
+            scripts/video_challenge.py
+
+      - name: Check shell syntax
+        run: |
+          bash -n backup.sh
+          bash -n restore.sh
+
+      - name: Create CI environment
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PASSWORD="$(python - <<'PY'
+          import secrets
+          print(secrets.token_hex(24))
+          PY
+          )"
+
+          cat > .env <<EOF2
+          PUBLIC_PORT=8080
+          POSTGRES_PASSWORD=${PASSWORD}
+          DATABASE_URL=postgresql://barq_app:${PASSWORD}@postgres:5432/barq_tasks
+          REDIS_URL=redis://redis:6379/0
+          EOF2
+
+      - name: Validate Compose configuration
+        run: |
+          docker compose -p barq-assessment config -q
+
+      - name: Build images
+        run: |
+          docker compose -p barq-assessment build
+
+      - name: Start stack and wait for health
+        run: |
+          docker compose -p barq-assessment up -d --wait --wait-timeout 60
+
+      - name: Validate deployment
+        run: |
+          python validate.py
+
+      - name: Collect diagnostics on failure
+        if: failure()
+        run: |
+          docker compose -p barq-assessment ps -a
+          docker compose -p barq-assessment logs --no-color --tail=200
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker compose -p barq-assessment down -v
