@@ -123,5 +123,82 @@ Earlier diagnostic commands also exposed the synthetic credential in terminal ou
 - **Root cause:** Not applicable; this is a post-hardening verification entry rather than a new incident.
 - **Fix:** Not applicable; implementation changes are documented in the related incident entries and commits.
 - **Retest evidence:** Final validation passed all checks. The running Compose project reported all five services healthy, with only NGINX publishing the host port. Backup creation completed successfully and checksum verification was performed. Earlier controlled failure/recovery, persistence, and restore evidence was retained as part of the assessment verification record.
-- **Related commit:** Verification covers the working-tree hardening changes associated with `4f46baa` and subsequent implementation changes currently awaiting their own commit.
-- **Remaining uncertainty:** GitHub Actions CI has been added and its YAML has been parsed locally, but the actual GitHub-hosted workflow run still needs to be executed and linked to the final commit.
+- **Related commit:** Verification covers the hardening and validation implementation associated with `4f46baa` and `5485bd7`; later documentation and video-related changes will be linked to their actual commits after recording.
+- **Remaining uncertainty:** GitHub Actions CI was executed on GitHub for commit `5485bd7` and completed successfully. The final submission CI run must still be linked to the eventual final commit after the video-related changes.
+
+---
+
+## INC-006 — PostgreSQL Credential Rotation and Runtime Secret Hardening
+
+### Entry / 2026-09-12 — Credential remediation
+- **Symptom:** A PostgreSQL credential had previously been exposed through application startup logs and diagnostic terminal output. The credential was therefore treated as compromised and required replacement rather than continued use.
+- **Hypothesis:** The PostgreSQL application role could be rotated in-place and the replacement credential could be deployed through the ignored runtime configuration without affecting persisted application data or service availability.
+- **Command or test:** Generated a cryptographically random replacement credential with Python `secrets` without printing it; updated the ignored `.env` runtime configuration; changed `.env` permissions from `0644` to `0600`; rotated the `barq_app` PostgreSQL role using the interactive `psql \password` workflow so the new credential was not supplied as a command-line argument; recreated `app-01` and `app-02`; verified `/ready`, `/records`, application logs, persisted records, and the full validation suite.
+- **Actual output:** The replacement credential was present in both required runtime configuration locations and passed a non-disclosing consistency check. `.env` permissions were `0600` and the file remained ignored by Git. PostgreSQL and both application containers became healthy after recreation. `/ready` returned HTTP 200, `/records` returned HTTP 200, existing PostgreSQL records remained available, and fresh application logs contained no credential patterns. `./validate.py` completed with `VALIDATION PASSED: all checks succeeded`.
+- **Failed attempt and what changed your thinking:** No failed attempt was fabricated. The previously compromised credential was not replayed to prove rejection because it was no longer safely available and recovering or redisplaying it would unnecessarily re-expose a compromised secret. Successful authentication with the replacement credential and the complete application validation suite were used as the verification evidence.
+- **Root cause:** The original PostgreSQL credential had become a security liability because it had been exposed during the earlier investigation.
+- **Fix:** Rotated the PostgreSQL `barq_app` role credential in-place, replaced the runtime credential in the ignored `.env` configuration, restricted `.env` permissions to owner-only access (`0600`), and recreated the application containers so they consumed the replacement credential. No PostgreSQL volume was deleted or recreated.
+- **Retest evidence:** `docker compose -p barq-assessment ps` showed PostgreSQL and both application instances healthy. `/ready` returned `200`; `/records` returned `200`; existing records remained queryable; both application log checks returned `PASS: no credential pattern found`; and `./validate.py` returned `VALIDATION PASSED: all checks succeeded`. The validation also reconfirmed dependency readiness, endpoint behavior, host-port isolation, network isolation, persistence, restart policies, resource limits, non-root execution, and digest-pinned images.
+- **Related commit:** TBD — documentation and security-remediation changes will be committed after the security documentation audit is complete.
+- **Remaining uncertainty:** The historical credential was not replay-tested after rotation because doing so would require recovering or redisclosing the compromised secret. GitLab token revocation/rotation is a separate credential-management action and is not claimed as completed by this entry.
+
+## INC-007 — Docker Desktop published-port reset during pre-video audit
+
+**Date:** 2026-09-13
+**Environment:** Docker Desktop on WSL2, project `barq-assessment`
+**Severity:** Medium
+**Status:** Resolved
+
+### Symptom
+
+During the pre-video runtime audit, the application containers and NGINX were healthy, and NGINX could successfully reach both application instances. However, requests from the WSL host to the published endpoint `127.0.0.1:8080` failed with:
+
+```text
+curl: (56) Recv failure: Connection reset by peer
+```
+
+### Investigation
+
+The following checks confirmed that the application stack itself was healthy:
+
+- `docker compose -p barq-assessment ps` showed `app-01`, `app-02`, `nginx`, `postgres`, and `redis` running and healthy.
+- `docker exec nginx wget -S -O- http://127.0.0.1/health` returned HTTP 200.
+- NGINX successfully reached `app-01:8080/health` and `app-02:8080/health`, both returning HTTP 200.
+- `docker exec nginx nginx -t` reported that the NGINX configuration syntax was valid.
+- NGINX access logs showed successful HTTP 200 requests to both upstream instances.
+- The failing host-side `curl` requests did not appear in the NGINX access log.
+
+This isolated the failure to the Docker Desktop/WSL published-port path rather than the Flask application, NGINX configuration, or backend network connectivity.
+
+### Resolution
+
+The NGINX container was restarted without performing a full-stack reset:
+
+```bash
+docker compose -p barq-assessment restart nginx
+```
+
+After the restart, the published endpoint was verified successfully:
+
+```text
+HTTP/1.1 200 OK
+X-Instance-ID: app-01
+```
+
+The Docker Compose project remained running, and no volumes were removed.
+
+### Verification
+
+The successful response after the NGINX-only restart confirmed recovery of the request path:
+
+```text
+WSL host -> 127.0.0.1:8080 -> Docker published port -> NGINX -> application
+```
+
+### Operational note
+
+`docker compose down` was deliberately not used. The issue was resolved with the smallest bounded recovery action, preserving the running stack and persistent data.
+
+### Lesson learned
+
+If the containers and internal NGINX/upstream checks are healthy but the host-side published port returns `Connection reset by peer` and the request is absent from the NGINX access log, first investigate the Docker Desktop/WSL published-port path. An NGINX-only restart can be tested as a bounded recovery action before considering broader environment changes.
