@@ -19,45 +19,53 @@ video timestamp).
 
 ## State disclosure (read this first)
 
-This README documents the **pre-video baseline state**: 2 application instances
-(`app-01`, `app-02`), public port **8080**. TASK.md's Part 5 video requires a **live**
-transition to 3 instances (`app-01`/`app-02`/`app-03`) and public port **8090**, performed
-once, on camera, without `docker compose down`. Where that matters, it's called out
-explicitly below rather than papered over. The final submission's README, architecture
-diagram, and evidence index will be updated to reflect the post-video three-instance/8090
-state — see `docs/EVIDENCE_INDEX.md` for which state each artifact currently describes.
+This README describes the **final submitted state**: 3 application instances
+(`app-01`, `app-02`, `app-03`) behind NGINX on public port **8090**. This is the result of
+the live Part 5 video transition, committed as `f910333a8f30777da4fb39c8eceee8b2af627c88`
+on top of the starting video commit `cf8029fc0e195ff7fe04a080a05dad0b4db022c4`. The
+internal Flask/container port remains **8080** — only the host-published port changed, from
+8080 to 8090. The original 2-instance/8080 pre-video baseline is referenced explicitly
+where relevant below (e.g. in the investigation history and historical log analysis) and is
+never presented as the current state. See `docs/EVIDENCE_INDEX.md` for the full evidence
+mapping.
 
 ---
 
 ## Architecture
 
 ```
-                         Client
-                           │
-                           ▼
-                ┌─────────────────────┐
-                │  NGINX (nginx)       │  ← only container publishing a host port
-                │  host 127.0.0.1:8080│     (127.0.0.1:${PUBLIC_PORT:-8080} -> 80)
-                └──────────┬───────────┘
-                     frontend network
-                           │
-             ┌─────────────┴─────────────┐
-             ▼                           ▼
-      ┌─────────────┐             ┌─────────────┐
-      │   app-01     │             │   app-02     │   Flask, non-root, resource-limited,
-      │ (frontend +  │             │ (frontend +  │   restart: unless-stopped
-      │  backend)    │             │  backend)    │
-      └──────┬───────┘             └──────┬───────┘
-             │          backend network (internal: true)         │
-             └───────────────┬───────────────────────┬───────────┘
-                              ▼                       ▼
-                     ┌─────────────┐         ┌─────────────┐
-                     │  postgres    │         │   redis      │
-                     │  named vol   │         │  named vol   │
-                     │  no host port│         │  AOF enabled │
-                     │  backend only│         │  backend only│
-                     └─────────────┘         └─────────────┘
+                                Client
+                                  │
+                                  ▼
+                       ┌─────────────────────┐
+                       │  NGINX (nginx)        │  ← only container publishing a host port
+                       │  host 127.0.0.1:8090  │     (127.0.0.1:${PUBLIC_PORT:-8090} -> 80)
+                       └──────────┬────────────┘
+                             frontend network
+                                  │
+              ┌───────────────────┼───────────────────┐
+              ▼                   ▼                   ▼
+       ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+       │   app-01     │     │   app-02     │     │   app-03     │  Flask, non-root,
+       │ (frontend +  │     │ (frontend +  │     │ (frontend +  │  resource-limited,
+       │  backend)    │     │  backend)    │     │  backend)    │  restart: unless-stopped
+       │  :8080       │     │  :8080       │     │  :8080       │  (internal container port,
+       └──────┬───────┘     └──────┬───────┘     └──────┬───────┘   unchanged from baseline)
+              │        backend network (internal: true)        │
+              └───────────────┬───────────────────┬────────────┘
+                               ▼                   ▼
+                      ┌─────────────┐      ┌─────────────┐
+                      │  postgres    │      │   redis      │
+                      │  named vol   │      │  named vol   │
+                      │  no host port│      │  AOF enabled │
+                      │  backend only│      │  backend only│
+                      └─────────────┘      └─────────────┘
 ```
+
+`app-03` was added live during the Part 5 video (commit `f910333`), using the same
+`docker-compose.yml` YAML anchors as `app-01`/`app-02` — identical resource limits,
+restart policy, healthcheck, and network membership by construction, not by manual
+duplication.
 
 NGINX is deliberately **not** attached to `backend` — it can only reach `app-01`/`app-02`
 via `frontend`, and has no network path to PostgreSQL or Redis at all. This is verified
@@ -65,8 +73,8 @@ live, not just declared: `validate.py` runs `docker exec nginx nc -z postgres 54
 `... redis 6379` and asserts both **fail**.
 
 A rendered architecture diagram (`architecture.png`) is tracked at the repository root.
-The current diagram documents the pre-video baseline (2 application instances on public
-port 8080). It will be updated after the live Part 5 transition to the final
+The current diagram documents the final submitted state (3 application instances on public
+port 8090). The live Part 5 transition has been completed and the final submitted state is
 three-instance/8090 state. See `docs/EVIDENCE_INDEX.md` for the corresponding evidence
 and commit.
 
@@ -142,38 +150,38 @@ Expected: all five containers (`app-01`, `app-02`, `postgres`, `redis`, `nginx`)
 ## 4. Health and readiness
 
 ```bash
-curl -i http://127.0.0.1:8080/health   # 200 — liveness only, no dependency check
-curl -i http://127.0.0.1:8080/ready    # 200 only if PostgreSQL AND Redis respond; else 503
+curl -i http://127.0.0.1:8090/health   # 200 — liveness only, no dependency check
+curl -i http://127.0.0.1:8090/ready    # 200 only if PostgreSQL AND Redis respond; else 503
 ```
 
 ## 5. Endpoint tests (copyable)
 
 ```bash
-curl -i http://127.0.0.1:8080/
-curl -i http://127.0.0.1:8080/instance
-curl -H 'Content-Type: application/json' -d '{"title":"Persistence proof"}' http://127.0.0.1:8080/records
-curl -i http://127.0.0.1:8080/records
-curl -i http://127.0.0.1:8080/counter
+curl -i http://127.0.0.1:8090/
+curl -i http://127.0.0.1:8090/instance
+curl -H 'Content-Type: application/json' -d '{"title":"Persistence proof"}' http://127.0.0.1:8090/records
+curl -i http://127.0.0.1:8090/records
+curl -i http://127.0.0.1:8090/counter
 
 # invalid input -> 400
-curl -i -H 'Content-Type: application/json' -d '{"title":""}' http://127.0.0.1:8080/records
+curl -i -H 'Content-Type: application/json' -d '{"title":""}' http://127.0.0.1:8090/records
 # unknown route -> 404
-curl -i http://127.0.0.1:8080/does-not-exist
+curl -i http://127.0.0.1:8090/does-not-exist
 ```
 
 Every response carries `X-Request-ID`. `/instance` additionally carries `X-Instance-ID`.
 Prove both backends serve traffic through NGINX:
 
 ```bash
-for i in $(seq 1 8); do
-  curl -s http://127.0.0.1:8080/instance | python3 -c "import sys,json; print(json.load(sys.stdin)['instance_id'])"
+for i in $(seq 1 15); do
+  curl -s http://127.0.0.1:8090/instance | python3 -c "import sys,json; print(json.load(sys.stdin)['instance_id'])"
 done
 ```
 
 ## 6. Validation
 
 ```bash
-./validate.py
+PUBLIC_PORT=8090 ./validate.py
 ```
 
 Bounded (60s max wait), explicit `PASS`/`FAIL` per check, **non-zero exit on any failure**.
@@ -186,7 +194,7 @@ persistence configuration (Postgres data-dir mount, Redis AOF checked live via
 `redis-cli CONFIG GET appendonly`, not just read from the compose file); restart policies;
 resource limits; non-root execution; digest-pinned images. **Application instances and the
 public port are discovered from the running environment, not hardcoded** — the same script
-runs unmodified against the 2-instance/8080 state or the 3-instance/8090 final video state.
+is intended for the final submitted 3-instance/8090 state. Historical 2-instance/8080 references are retained only where they document the pre-video baseline.
 
 ## 7. Failure / recovery test
 
@@ -232,12 +240,12 @@ without proving the result is queryable is not treated as success.
 ```bash
 curl -s -X POST -H 'Content-Type: application/json' \
   -d '{"title":"persistence-proof-'"$(date -u +%s)"'"}' \
-  http://127.0.0.1:8080/records
+  http://127.0.0.1:8090/records
 
-docker compose -p barq-assessment up -d --force-recreate postgres app-01 app-02
+docker compose -p barq-assessment up -d --force-recreate postgres app-01 app-02 app-03
 
 docker compose -p barq-assessment ps -a   # wait for all to report healthy again
-curl -s http://127.0.0.1:8080/records     # the record above must still be present
+curl -s http://127.0.0.1:8090/records     # the record above must still be present
 ```
 
 This never deletes the named `postgres-data` volume — recreation targets the containers
@@ -257,8 +265,8 @@ docker compose -p barq-assessment down -v     # also deletes named volumes (dest
 
 | Service | Networks | Host port |
 |---|---|---|
-| `nginx` | `frontend` only | `127.0.0.1:${PUBLIC_PORT:-8080}` — the **only** published port in the whole stack |
-| `app-01`, `app-02` | `frontend` + `backend` | none |
+| `nginx` | `frontend` only | `127.0.0.1:${PUBLIC_PORT:-8090}` — the **only** published port in the whole stack |
+| `app-01`, `app-02`, `app-03` | `frontend` + `backend` | none (internal container port 8080, unchanged from baseline) |
 | `postgres` | `backend` only | none |
 | `redis` | `backend` only | none |
 

@@ -46,7 +46,7 @@ jobs:
           )"
 
           cat > .env <<EOF2
-          PUBLIC_PORT=8080
+          PUBLIC_PORT=8090
           POSTGRES_PASSWORD=${PASSWORD}
           DATABASE_URL=postgresql://barq_app:${PASSWORD}@postgres:5432/barq_tasks
           REDIS_URL=redis://redis:6379/0
